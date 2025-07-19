@@ -154,21 +154,46 @@ class OrderBook:
         }
 
     def update_price_volume_plot(self, frame):
-            """Update the price and volume plots."""
-            self.line_price.set_data(self.time_history, self.price_history)
-            self.line_volume.set_data(self.time_history, self.volume_history)
-            if self.time_history:
-                current_time = self.time_history[-1]
-                self.ax_price.set_xlim(current_time - 60, current_time)
-                if self.price_history:
-                    min_price = min(self.price_history[-100:])
-                    max_price = max(self.price_history[-100:])
-                    padding = (max_price - min_price) * 0.1 or 1.0
-                    self.ax_price.set_ylim(min_price - padding, max_price + padding)
-                if self.volume_history:
-                    max_volume = max(self.volume_history[-100:] + [10])  # Ensure minimum range
-                    self.ax_volume.set_ylim(0, max_volume * 1.1)
-            return self.line_price, self.line_volume
+        """Update the price and volume plots."""
+        # Filter data for the last 60 seconds
+        current_time = time.time()
+        time_window = current_time - 60
+        visible_indices = [i for i, t in enumerate(self.time_history) if t >= time_window]
+        
+        # Extract visible data
+        visible_times = [self.time_history[i] for i in visible_indices]
+        visible_prices = [self.price_history[i] for i in visible_indices]
+        visible_volumes = [self.volume_history[i] for i in visible_indices]
+        
+        # Update line data
+        self.line_price.set_data(visible_times, visible_prices)
+        self.line_volume.set_data(visible_times, visible_volumes)
+        
+        # Update x-axis
+        self.ax_price.set_xlim(time_window, current_time)
+        
+        # Update price y-axis
+        if visible_prices:
+            min_price = min(visible_prices)
+            max_price = max(visible_prices)
+            padding = (max_price - min_price) * 0.1 or 1.0
+            self.ax_price.set_ylim(min_price - padding, max_price + padding)
+        else:
+            # Fallback if no data
+            self.ax_price.set_ylim(self.last_trade_price - 5, self.last_trade_price + 5)
+        
+        # Update volume y-axis
+        if visible_volumes:
+            max_volume = max(visible_volumes)
+            self.ax_volume.set_ylim(0, max_volume * 1.1 or 10)
+        else:
+            # Fallback if no data
+            self.ax_volume.set_ylim(0, 10)
+        
+        # Force redraw
+        self.fig.canvas.draw()
+        
+        return self.line_price, self.line_volume
 
     def update_bid_ask_plot(self, frame):
         """Update the bid-ask order book plot."""
