@@ -49,7 +49,7 @@ Sent order: {'side': 'sell', 'price': 100.0, 'quantity': 10}
 If there was already a corresponding matching order, you will get a fill notification:
 
 ```shell
-Server responded: [{'timestamp': 248554.055830083, 'buyer_id': 'bf2d88d4-4286-4f99-9ff3-6237ab9c685e', 'seller_id': 'dc2d7bb0-21fc-479a-bf9d-6b6255ca9971', 'price': 100.0, 'quantity': 5}]
+Server responded: [{'price': 100.0, 'quantity': 5, 'timestamp': 248554.055830083, 'buyer_id': 'bf2d88d4-4286-4f99-9ff3-6237ab9c685e', 'seller_id': 'dc2d7bb0-21fc-479a-bf9d-6b6255ca9971'}]
 ```
 
 Here, only 5 shares got filled, and the other 5 are still in the order book.
