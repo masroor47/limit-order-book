@@ -8,3 +8,9 @@ __pycache__/
 *.pyo
 *.pyd
 *.pdb
+
+.python-version
+venv/
+
+# Sqlite database
+*.db
