@@ -44,11 +44,13 @@ class OrderServer:
                         await seller_ws.send(json.dumps([trade]))
         except websockets.exceptions.ConnectionClosed:
             print(f"Connection closed for trader {trader_id}")
-            del self.trader_ids[websocket]  # Clean up on disconnect
         finally:
+            # Clean up both mappings
             if websocket in self.trader_ids:
                 print(f"Cleaning up trader {trader_id}")
                 del self.trader_ids[websocket]
+            if trader_id in self.websocket_traders:
+                del self.websocket_traders[trader_id]
 
     async def start(self):
         async with websockets.serve(self.handle_order, self.host, self.port):
