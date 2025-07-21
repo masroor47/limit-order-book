@@ -1,5 +1,6 @@
 import asyncio
 import sortedcontainers
+import time
 
 import sqlite3
 from collections import deque
@@ -83,7 +84,7 @@ class OrderBook:
             opposite_order = opposite_orders[0]
             trade_quantity = min(order.quantity, opposite_order.quantity)
             trade = {
-                'timestamp': asyncio.get_event_loop().time(),
+                'timestamp': time.time(),
                 'buyer_id': buyer_id or opposite_order.trader_id,
                 'seller_id': seller_id or opposite_order.trader_id,
                 'price': best_price,

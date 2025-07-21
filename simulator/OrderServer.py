@@ -1,6 +1,7 @@
 import asyncio
 import websockets
 import json
+import time
 import uuid
 
 from OrderBook import Order
@@ -29,7 +30,7 @@ class OrderServer:
                     side=order_dict["side"],
                     price=float(order_dict["price"]),
                     quantity=int(order_dict["quantity"]),
-                    timestamp=asyncio.get_event_loop().time()
+                    timestamp=time.time()
                 )
                 trades = await self.order_book.add_order(order)
                 await websocket.send(json.dumps(trades))
