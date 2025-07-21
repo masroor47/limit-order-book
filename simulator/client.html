@@ -23,14 +23,40 @@
         margin: 10px 0;
         padding: 10px;
       }
+      .date-range {
+        margin: 10px 0;
+      }
+      .date-range label {
+        margin-right: 10px;
+      }
+      .date-range input {
+        margin-right: 10px;
+      }
     </style>
   </head>
   <body>
     <h1>Bloomberg</h1>
+    <div class="date-range">
+      <label for="start-date">Start Date:</label>
+      <input type="datetime-local" id="start-date" />
+      <label for="end-date">End Date:</label>
+      <input type="datetime-local" id="end-date" />
+      <button id="apply-range">Apply Range</button>
+    </div>
     <div id="plot"></div>
     <button id="toggle-orderbook">Show Order Book</button>
     <div id="orderbook-plot"></div>
     <script>
+      // Helper function to format date for datetime-local
+      function formatDateTimeLocal(date) {
+        const yyyy = date.getFullYear();
+        const mm = String(date.getMonth() + 1).padStart(2, "0");
+        const dd = String(date.getDate()).padStart(2, "0");
+        const hh = String(date.getHours()).padStart(2, "0");
+        const min = String(date.getMinutes()).padStart(2, "0");
+        return `${yyyy}-${mm}-${dd}T${hh}:${min}`;
+      }
+
       // Initialize WebSocket connection
       const ws = new WebSocket("ws://127.0.0.1:8766");
 
@@ -65,20 +91,93 @@
         }
       });
 
-      ws.onopen = function () {
-        console.log("WebSocket connected");
+      // Date range elements
+      const startDateInput = document.getElementById("start-date");
+      const endDateInput = document.getElementById("end-date");
+      const applyButton = document.getElementById("apply-range");
 
-        // Request historical trades (assuming from_time=0, to_time= current Unix timestamp in seconds)
-        const currentTime = Math.floor(Date.now() / 1000);
+      // Load persistent range from localStorage
+      const savedStart = localStorage.getItem("startDate");
+      const savedEnd = localStorage.getItem("endDate");
+      if (savedStart) {
+        startDateInput.value = savedStart;
+      }
+      if (savedEnd) {
+        endDateInput.value = savedEnd;
+      }
+
+      // Set default start if not saved (market open today or previous day)
+      if (!startDateInput.value) {
+        const now = new Date();
+        let marketOpen = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate(),
+          9,
+          30,
+          0,
+          0
+        );
+        if (marketOpen > now) {
+          marketOpen.setDate(marketOpen.getDate() - 1);
+        }
+        startDateInput.value = formatDateTimeLocal(marketOpen);
+      }
+
+      // Function to request data for a given range
+      function requestHistorical(fromTime, toTime) {
         ws.send(
           JSON.stringify({
             type: "request_historical",
-            from_time: 0,
-            to_time: currentTime,
+            from_time: fromTime,
+            to_time: toTime,
           })
         );
+      }
 
-        // Subscribe to real-time trades MOVED to after historical is processed
+      // Function to initialize or update plot
+      function updatePlot(trades) {
+        if (trades && Array.isArray(trades)) {
+          // Sort by timestamp just in case
+          trades.sort((a, b) => a.timestamp - b.timestamp);
+          tradeData.x = trades.map((trade) => new Date(trade.timestamp * 1000));
+          tradeData.y = trades.map((trade) => trade.price);
+
+          const trace = {
+            x: tradeData.x,
+            y: tradeData.y,
+            mode: "lines+markers",
+            type: "scatter",
+            name: "Trade Prices",
+          };
+          const layout = {
+            title: "Equity Price",
+            xaxis: { title: "Time" },
+            yaxis: { title: "Price" },
+          };
+          Plotly.newPlot("plot", [trace], layout);
+        }
+      }
+
+      ws.onopen = function () {
+        console.log("WebSocket connected");
+
+        // On open, request initial data using saved or default range
+        let fromTime = 0;
+        let toTime = Math.floor(Date.now() / 1000);
+        if (startDateInput.value) {
+          fromTime = Math.floor(
+            new Date(startDateInput.value).getTime() / 1000
+          );
+        }
+        if (endDateInput.value) {
+          toTime = Math.floor(new Date(endDateInput.value).getTime() / 1000);
+        } else {
+          toTime = Math.floor(Date.now() / 1000);
+        }
+        requestHistorical(fromTime, toTime);
+
+        // Subscribe to real-time trades after historical
       };
 
       ws.onmessage = function (event) {
@@ -86,47 +185,38 @@
         console.log("Received message:", data); // Debug: Check what arrives
 
         if (data.type === "historical_trades") {
-          // Process historical trades (assume data.trades is array of {timestamp: unix_seconds, price: number, ...})
-          if (data.trades && Array.isArray(data.trades)) {
-            // Sort by timestamp just in case
-            data.trades.sort((a, b) => a.timestamp - b.timestamp);
-            tradeData.x = data.trades.map(
-              (trade) => new Date(trade.timestamp * 1000)
-            );
-            tradeData.y = data.trades.map((trade) => trade.price);
+          updatePlot(data.trades);
 
-            // Initialize Plotly chart
-            const trace = {
-              x: tradeData.x,
-              y: tradeData.y,
-              mode: "lines+markers",
-              type: "scatter",
-              name: "Trade Prices",
-            };
-            const layout = {
-              title: "Equity Price",
-              xaxis: { title: "Time" },
-              yaxis: { title: "Price" },
-            };
-            Plotly.newPlot("plot", [trace], layout);
-
-            // Now subscribe to real-time trades (after historical to avoid race)
-            ws.send(JSON.stringify({ type: "subscribe_trades" }));
-          }
+          // Subscribe to real-time trades only after historical is processed
+          ws.send(JSON.stringify({ type: "subscribe_trades" }));
         } else if (data.type === "new_trades") {
-          // Append new trades to the data (still keep for potential other uses, but not needed for extendTraces)
+          // Append new trades if they fall within the current range
+          const currentFrom = startDateInput.value
+            ? new Date(startDateInput.value).getTime() / 1000
+            : 0;
+          const currentTo = endDateInput.value
+            ? new Date(endDateInput.value).getTime() / 1000
+            : Infinity;
+
           if (data.trades && Array.isArray(data.trades)) {
             const newX = [];
             const newY = [];
             for (const trade of data.trades) {
-              tradeData.x.push(new Date(trade.timestamp * 1000));
-              tradeData.y.push(trade.price);
-              newX.push(new Date(trade.timestamp * 1000));
-              newY.push(trade.price);
+              if (
+                trade.timestamp >= currentFrom &&
+                trade.timestamp <= currentTo
+              ) {
+                tradeData.x.push(new Date(trade.timestamp * 1000));
+                tradeData.y.push(trade.price);
+                newX.push(new Date(trade.timestamp * 1000));
+                newY.push(trade.price);
+              }
             }
 
-            // Append to the existing trace (index 0, assuming single trace)
-            Plotly.extendTraces("plot", { x: [newX], y: [newY] }, [0]);
+            if (newX.length > 0) {
+              // Append to the existing trace (index 0, assuming single trace)
+              Plotly.extendTraces("plot", { x: [newX], y: [newY] }, [0]);
+            }
           }
         } else if (data.type === "order_book_update") {
           // Process order book update
@@ -140,10 +230,10 @@
             for (let order of state.bids[priceStr]) {
               totalQty += parseFloat(order.quantity);
             }
-            bidLevels.push({ price: price, quantity: totalQty }); // FIXED: Push outside inner loop
+            bidLevels.push({ price: price, quantity: totalQty });
           }
-          bidLevels.sort((a, b) => b.price - a.price); // FIXED: Moved sort outside
-          const bids = bidLevels.slice(0, 10); // FIXED: Moved slice outside
+          bidLevels.sort((a, b) => b.price - a.price);
+          const bids = bidLevels.slice(0, 10);
 
           let askLevels = [];
           for (let priceStr in state.asks) {
@@ -157,7 +247,6 @@
           askLevels.sort((a, b) => a.price - b.price);
           const asks = askLevels.slice(0, 10);
 
-          // Rest unchanged
           const bid_prices = bids.map((b) => b.price);
           const bid_quantities = bids.map((b) => -b.quantity); // Negative for left side
 
@@ -212,6 +301,38 @@
           }
         }
       };
+
+      // Apply range button listener
+      applyButton.addEventListener("click", () => {
+        const startValue = startDateInput.value;
+        const endValue = endDateInput.value;
+
+        // Save to localStorage for persistence
+        if (startValue) {
+          localStorage.setItem("startDate", startValue);
+        } else {
+          localStorage.removeItem("startDate");
+        }
+        if (endValue) {
+          localStorage.setItem("endDate", endValue);
+        } else {
+          localStorage.removeItem("endDate");
+        }
+
+        let fromTime = 0;
+        let toTime = Math.floor(Date.now() / 1000);
+        if (startValue) {
+          fromTime = Math.floor(new Date(startValue).getTime() / 1000);
+        }
+        if (endValue) {
+          toTime = Math.floor(new Date(endValue).getTime() / 1000);
+        } else {
+          toTime = Math.floor(Date.now() / 1000);
+        }
+
+        // Request new historical data for the range
+        requestHistorical(fromTime, toTime);
+      });
 
       ws.onclose = function () {
         console.log("WebSocket disconnected");
