@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stock Market Data Visualization Client</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      #plot {
+        width: 100%;
+        height: 600px;
+      }
+      #orderbook-plot {
+        width: 100%;
+        height: 600px;
+        display: none;
+      }
+      button {
+        margin: 10px 0;
+        padding: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Real-Time Trade Data Visualization</h1>
+    <div id="plot"></div>
+    <button id="toggle-orderbook">Show Order Book</button>
+    <div id="orderbook-plot"></div>
+    <script>
+      // Initialize WebSocket connection
+      const ws = new WebSocket("ws://127.0.0.1:8766");
+
+      // Data storage for trades (assuming trades have 'timestamp' and 'price' fields)
+      let tradeData = {
+        x: [], // timestamps (converted to Date objects)
+        y: [], // prices
+      };
+
+      // For order book
+      let subscribedOrderBook = false;
+      let orderBookPlotInitialized = false;
+      const toggleButton = document.getElementById("toggle-orderbook");
+      let showOrderBook = false;
+
+      toggleButton.addEventListener("click", () => {
+        showOrderBook = !showOrderBook;
+        if (showOrderBook) {
+          if (!subscribedOrderBook) {
+            ws.send(JSON.stringify({ type: "subscribe_order_book" }));
+            subscribedOrderBook = true;
+          }
+          document.getElementById("orderbook-plot").style.display = "block";
+          toggleButton.textContent = "Hide Order Book";
+        } else {
+          document.getElementById("orderbook-plot").style.display = "none";
+          toggleButton.textContent = "Show Order Book";
+          // Note: Not unsubscribing to keep updates coming if reopened
+        }
+      });
+
+      ws.onopen = function () {
+        console.log("WebSocket connected");
+
+        // Request historical trades (assuming from_time=0, to_time= current Unix timestamp in seconds)
+        const currentTime = Math.floor(Date.now() / 1000);
+        ws.send(
+          JSON.stringify({
+            type: "request_historical",
+            from_time: 0,
+            to_time: currentTime,
+          })
+        );
+
+        // Subscribe to real-time trades
+        ws.send(JSON.stringify({ type: "subscribe_trades" }));
+
+        // Order book subscription handled by button
+      };
+
+      ws.onmessage = function (event) {
+        const data = JSON.parse(event.data);
+        console.log("Received message:", data);
+
+        if (data.type === "historical_trades") {
+          // Process historical trades (assume data.trades is array of {timestamp: unix_seconds, price: number, ...})
+          if (data.trades && Array.isArray(data.trades)) {
+            // Sort by timestamp just in case
+            data.trades.sort((a, b) => a.timestamp - b.timestamp);
+            tradeData.x = data.trades.map(
+              (trade) => new Date(trade.timestamp * 1000)
+            );
+            tradeData.y = data.trades.map((trade) => trade.price);
+
+            // Initialize Plotly chart
+            const trace = {
+              x: tradeData.x,
+              y: tradeData.y,
+              mode: "lines+markers",
+              type: "scatter",
+              name: "Trade Prices",
+            };
+            const layout = {
+              title: "Historical and Real-Time Trade Prices",
+              xaxis: { title: "Time" },
+              yaxis: { title: "Price" },
+            };
+            Plotly.newPlot("plot", [trace], layout);
+          }
+        } else if (data.type === "new_trades") {
+          // Append new trades to the data
+          if (data.trades && Array.isArray(data.trades)) {
+            for (const trade of data.trades) {
+              tradeData.x.push(new Date(trade.timestamp * 1000));
+              tradeData.y.push(trade.price);
+            }
+
+            // Update Plotly chart
+            const trace = {
+              x: tradeData.x,
+              y: tradeData.y,
+              mode: "lines+markers",
+              type: "scatter",
+              name: "Trade Prices",
+            };
+            const layout = {
+              title: "Historical and Real-Time Trade Prices",
+              xaxis: { title: "Time" },
+              yaxis: { title: "Price" },
+            };
+            Plotly.react("plot", [trace], layout);
+          }
+        } else if (data.type === "order_book_update") {
+          // Process order book update
+          const state = data.data;
+          // state = {bids: { "price": [{..., quantity: number}, ...], ... }, asks: {...}}
+          // Aggregate quantities per price level
+          let bidLevels = [];
+          for (let priceStr in state.bids) {
+            let price = parseFloat(priceStr);
+            let totalQty = 0;
+            for (let order of state.bids[priceStr]) {
+              totalQty += parseFloat(order.quantity); // Assume quantity is number
+              bidLevels.push({ price: price, quantity: totalQty });
+            }
+            bidLevels.sort((a, b) => b.price - a.price);
+            const bids = bidLevels.slice(0, 10);
+
+            let askLevels = [];
+            for (let priceStr in state.asks) {
+              let price = parseFloat(priceStr);
+              let totalQty = 0;
+              for (let order of state.asks[priceStr]) {
+                totalQty += parseFloat(order.quantity);
+              }
+              askLevels.push({ price: price, quantity: totalQty });
+            }
+            askLevels.sort((a, b) => a.price - b.price);
+            const asks = askLevels.slice(0, 10);
+
+            const bid_prices = bids.map((b) => b.price);
+            const bid_quantities = bids.map((b) => -b.quantity); // Negative for left side
+
+            const ask_prices = asks.map((a) => a.price);
+            const ask_quantities = asks.map((a) => a.quantity);
+
+            // Compute max quantity for symmetric axis
+            const allQuantities = [
+              ...bids.map((b) => b.quantity),
+              ...asks.map((a) => a.quantity),
+            ];
+            const maxQty =
+              allQuantities.length > 0 ? Math.max(...allQuantities) : 0;
+
+            const trace1 = {
+              y: bid_prices,
+              x: bid_quantities,
+              type: "bar",
+              orientation: "h",
+              marker: { color: "green" },
+              name: "Bids",
+              width: 0.1,
+            };
+
+            const trace2 = {
+              y: ask_prices,
+              x: ask_quantities,
+              type: "bar",
+              orientation: "h",
+              marker: { color: "red" },
+              name: "Asks",
+              width: 0.1,
+            };
+
+            const layout = {
+              title: "Real-Time Order Book (Bid-Ask Spread)",
+              yaxis: { title: "Price" },
+              xaxis: {
+                title: "Quantity",
+                range: [-maxQty * 1.1, maxQty * 1.1],
+                tickvals: [], // Default labels; negative on left
+              },
+              showlegend: true,
+              barmode: "overlay", // Since y positions differ
+            };
+
+            if (!orderBookPlotInitialized) {
+              Plotly.newPlot("orderbook-plot", [trace1, trace2], layout);
+              orderBookPlotInitialized = true;
+            } else {
+              Plotly.react("orderbook-plot", [trace1, trace2], layout);
+            }
+          }
+        }
+
+        ws.onclose = function () {
+          console.log("WebSocket disconnected");
+        };
+
+        ws.onerror = function (error) {
+          console.error("WebSocket error:", error);
+        };
+      };
+    </script>
+  </body>
+</html>
