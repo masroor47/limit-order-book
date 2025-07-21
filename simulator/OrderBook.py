@@ -1,6 +1,9 @@
 import asyncio
 import sortedcontainers
 
+import sqlite3
+from collections import deque
+
 from dataclasses import dataclass
 from typing import List, Dict
 
@@ -14,16 +17,34 @@ class Order:
     timestamp: float
 
 class OrderBook:
-    def __init__(self):
+    def __init__(self, db_path='trades.db', buffer_size=1000):
         self.bids = sortedcontainers.SortedDict()
         self.asks = sortedcontainers.SortedDict()
         self.order_map = {}
         self.last_trade_price = None
-        self.trades = []
-        self.time_history = []
-        self.price_history = []
-        self.volume_history = []
+        self.trades = deque(maxlen=buffer_size)
+        self.time_history = deque(maxlen=buffer_size)
+        self.price_history = deque(maxlen=buffer_size)
+        self.volume_history = deque(maxlen=buffer_size)
         self.lock = asyncio.Lock()  # For async safety
+        self.event_queue = asyncio.Queue()
+
+        self.pending_trades = []  # Buffer for batching DB inserts
+        self.batch_size = 100  # Adjust based on expected volume; e.g., flush every 100 trades
+        asyncio.create_task(self._flush_to_db_periodically())
+
+        # initialize database
+        self.db_conn = sqlite3.connect(db_path)
+        self.db_conn.execute('''
+            CREATE TABLE IF NOT EXISTS trades (
+                timestamp REAL,
+                buyer_id TEXT,
+                seller_id TEXT,
+                price REAL,
+                quantity INTEGER
+            )
+        ''')
+        self.db_conn.commit()
 
     async def add_order(self, order: Order):
         async with self.lock:
@@ -93,11 +114,22 @@ class OrderBook:
         book[order.price].append(order)
 
     async def _record_trades(self, trades: List[Dict]) -> None:
-        self.trades.extend(trades)
         for trade in trades:
+            # Add to short-term buffers
+            self.trades.append(trade)
+            self.time_history.append(trade['timestamp'])
             self.price_history.append(trade['price'])
             self.volume_history.append(trade['quantity'])
-            self.time_history.append(trade['timestamp'])
+            # Buffer for DB
+            self.pending_trades.append(trade)
+        
+        # Flush immediately if buffer is full (for high-volume bursts)
+        if len(self.pending_trades) >= self.batch_size:
+            await self._flush_to_db()
+        
+        # Notify real-time listeners (unchanged)
+        if trades:
+            await self.event_queue.put({'type': 'new_trades', 'trades': trades})
 
     def _validate_order(self, order: Order) -> bool:
         if order.side not in ("buy", "sell"):
@@ -114,7 +146,7 @@ class OrderBook:
                 'bids': {price: [o.__dict__ for o in orders] for price, orders in self.bids.items()},
                 'asks': {price: [o.__dict__ for o in orders] for price, orders in self.asks.items()},
                 'last_price': self.last_trade_price,
-                'recent_trades': self.trades[-10:]  # Last 10 trades
+                'recent_trades': list(self.trades)[-10:]  # Last 10 from buffer
             }
         
     def get_best_bid(self):
@@ -127,8 +159,62 @@ class OrderBook:
             return None, []
         return self.asks.peekitem(0)
 
-    def cancel_order(self, order_id):
-        pass
+    async def cancel_order(self, order_id: str) -> bool:
+        async with self.lock:
+            if order_id not in self.order_map:
+                return False
+            order = self.order_map[order_id]
+            book = self.bids if order.side == 'buy' else self.asks
+            if order.price in book:
+                book[order.price] = [o for o in book[order.price] if o.order_id != order_id]
+                if not book[order.price]:
+                    del book[order.price]
+            del self.order_map[order_id]
+            await self.event_queue.put({'type': 'cancel', 'order_id': order_id})
+            return True
 
     def get_last_price(self):
-        pass
+        return self.last_trade_price
+    
+    async def get_historical_trades(self, from_time: float = None, to_time: float = None) -> List[Dict]:
+        async with self.lock:
+            query = 'SELECT timestamp, buyer_id, seller_id, price, quantity FROM trades'
+            params = []
+            conditions = []
+            if from_time is not None:
+                conditions.append('timestamp >= ?')
+                params.append(from_time)
+            if to_time is not None:
+                conditions.append('timestamp <= ?')
+                params.append(to_time)
+            if conditions:
+                query += ' WHERE ' + ' AND '.join(conditions)
+            query += ' ORDER BY timestamp ASC'
+            
+            cursor = self.db_conn.execute(query, params)
+            return [
+                {'timestamp': row[0], 'buyer_id': row[1], 'seller_id': row[2], 'price': row[3], 'quantity': row[4]}
+                for row in cursor.fetchall()
+            ]
+
+    async def _flush_to_db(self):
+        print("-------- Flushing trades to DB -------")
+        async with self.lock:
+            print(f"Pending trades to flush: {len(self.pending_trades)}")
+            if self.pending_trades:
+                # Use executemany for batch insert in a transaction
+                query = 'INSERT INTO trades (timestamp, buyer_id, seller_id, price, quantity) VALUES (?, ?, ?, ?, ?)'
+                args = [(trade['timestamp'], trade['buyer_id'], trade['seller_id'], trade['price'], trade['quantity']) for trade in self.pending_trades]
+                print(query, args)
+                self.db_conn.executemany(
+                    query,
+                    args
+                )
+                self.db_conn.commit()
+                self.pending_trades.clear()
+
+    async def _flush_to_db_periodically(self):
+        while True:
+            print("Flushing trades to DB...")
+            await self._flush_to_db()
+            await asyncio.sleep(5)
