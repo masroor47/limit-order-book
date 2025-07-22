@@ -76,6 +76,15 @@
         y: [], // prices
       };
 
+      let ohlcTimes = [];
+      let opens = [];
+      let highs = [];
+      let lows = [];
+      let closes = [];
+      let volumes = [];
+      let currentBucket = 0;
+      let currentCandle = {};
+
       // For order book
       let subscribedOrderBook = false;
       let orderBookPlotInitialized = false;
@@ -189,19 +198,20 @@
 
       // Function to initialize or update OHLCV plot
       function updateOHLCVPlot(data) {
-        const times = data.map((d) => new Date(d.time * 1000)); // Convert back to Date
-        const opens = data.map((d) => d.open);
-        const highs = data.map((d) => d.high);
-        const lows = data.map((d) => d.low);
-        const closes = data.map((d) => d.close);
-        const volumes = data.map((d) => d.volume);
+        ohlcTimes = data.map((d) => new Date(d.time * 1000)); // Convert back to Date
+        opens = data.map((d) => d.open);
+        highs = data.map((d) => d.high);
+        lows = data.map((d) => d.low);
+        closes = data.map((d) => d.close);
+        volumes = data.map((d) => d.volume);
         const tickSize = parseInt(tickSizeSelect.value);
+
         Plotly.newPlot(
           "plot",
           [
             {
               type: "candlestick",
-              x: times,
+              x: ohlcTimes,
               open: opens,
               high: highs,
               low: lows,
@@ -212,7 +222,7 @@
             },
             {
               type: "bar",
-              x: times,
+              x: ohlcTimes,
               y: volumes,
               name: "Volume",
               yaxis: "y2",
@@ -240,14 +250,26 @@
             margin: { t: 50, b: 50, l: 50, r: 50 }, // Optional: Adjust margins
           }
         );
-        currentBucket = Math.floor(Date.now() / 1000 / tickSize) * tickSize; // Track for real-time
-        currentCandle = {
-          open: data[data.length - 1]?.close || null,
-          high: null,
-          low: null,
-          close: null,
-          volume: 0,
-        };
+        if (data.length > 0) {
+          currentBucket =
+            Math.floor(data[data.length - 1].time / 1000 / tickSize) * tickSize; // Track for real-time
+          currentCandle = {
+            open: data[data.length - 1].open || null,
+            high: data[data.length - 1].high || null,
+            low: data[data.length - 1].low || null,
+            close: data[data.length - 1].close || null,
+            volume: data[data.length - 1].volume || 0,
+          };
+        } else {
+          currentBucket = Math.floor(Date.now() / 1000 / tickSize) * tickSize; // Track for real-time
+          currentCandle = {
+            open: data[data.length - 1]?.close || null,
+            high: null,
+            low: null,
+            close: null,
+            volume: 0,
+          };
+        }
       }
 
       ws.onopen = function () {
@@ -296,24 +318,35 @@
           // Subscribe to real-time OHLCV updates
           ws.send(JSON.stringify({ type: "subscribe_trades" }));
         } else if (data.type === "new_trades") {
+          data.trades.sort((a, b) => a.timestamp - b.timestamp); // Ensure chronological order
           data.trades.forEach((trade) => {
             const tickSize = parseInt(tickSizeSelect.value);
             const bucket = Math.floor(trade.timestamp / tickSize) * tickSize;
             if (bucket > currentBucket) {
-              // Finalize old candle, start new (add to Plotly with Plotly.extendTraces)
+              // Start and add new candle for this bucket
+              const newTime = new Date(bucket * 1000);
+              ohlcTimes.push(newTime);
+              opens.push(trade.price);
+              highs.push(trade.price);
+              lows.push(trade.price);
+              closes.push(trade.price);
+              volumes.push(trade.quantity);
               Plotly.extendTraces(
-                "chart",
+                "plot",
                 {
-                  x: [[new Date(currentBucket * 1000)]],
-                  open: [[currentCandle.open]] /* etc */,
+                  x: [[newTime]],
+                  open: [[trade.price]],
+                  high: [[trade.price]],
+                  low: [[trade.price]],
+                  close: [[trade.price]],
                 },
                 [0]
               );
               Plotly.extendTraces(
-                "chart",
+                "plot",
                 {
-                  x: [[new Date(currentBucket * 1000)]],
-                  y: [[currentCandle.volume]],
+                  x: [[newTime]],
+                  y: [[trade.quantity]],
                 },
                 [1]
               );
@@ -325,9 +358,9 @@
                 close: trade.price,
                 volume: trade.quantity,
               };
-            } else {
-              // Update current
-              if (!currentCandle.open) currentCandle.open = trade.price;
+            } else if (bucket === currentBucket) {
+              // Update current candle
+              if (currentCandle.open === null) currentCandle.open = trade.price;
               currentCandle.high = Math.max(
                 currentCandle.high || trade.price,
                 trade.price
@@ -338,7 +371,36 @@
               );
               currentCandle.close = trade.price;
               currentCandle.volume += trade.quantity;
-              // React to Plotly: Plotly.react('chart', /* updated data */);
+              // Update arrays
+              const lastIndex = ohlcTimes.length - 1;
+              opens[lastIndex] = currentCandle.open;
+              highs[lastIndex] = currentCandle.high;
+              lows[lastIndex] = currentCandle.low;
+              closes[lastIndex] = currentCandle.close;
+              volumes[lastIndex] = currentCandle.volume;
+              // Update plot (only last point)
+              Plotly.update(
+                "plot",
+                {
+                  [`open[${lastIndex}]`]: currentCandle.open,
+                  [`high[${lastIndex}]`]: currentCandle.high,
+                  [`low[${lastIndex}]`]: currentCandle.low,
+                  [`close[${lastIndex}]`]: currentCandle.close,
+                },
+                {},
+                [0]
+              );
+              Plotly.update(
+                "plot",
+                {
+                  [`y[${lastIndex}]`]: currentCandle.volume,
+                },
+                {},
+                [1]
+              );
+            } else {
+              // Trade in past bucket; ignore or handle as needed
+              console.log(`Ignoring old trade in bucket ${bucket}`);
             }
           });
           // } else if (data.type === "new_trades") {
