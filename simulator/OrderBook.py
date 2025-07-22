@@ -46,19 +46,18 @@ class OrderBook:
             )
         ''')
         self.db_conn.commit()
+        self.db_conn.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON trades(timestamp)')
+        self.db_conn.commit()
 
     async def add_order(self, order: Order):
         async with self.lock:
-            print(f"LOB: Adding order {order}")
             if not self._validate_order(order):
                 raise ValueError("Invalid order: must have valid side, price, and quantity")
             
             self.order_map[order.order_id] = order
             trades = await self._match_order(order)
-            print(f"LOB: Trades executed: {trades}")
             # add unmatched quantity to book
             if order.quantity > 0:
-                print(f"LOB: Adding remaining order to book {order}")
                 self._add_to_book(order)
 
             if trades:
@@ -199,14 +198,11 @@ class OrderBook:
             ]
 
     async def _flush_to_db(self):
-        print("-------- Flushing trades to DB -------")
         async with self.lock:
-            print(f"Pending trades to flush: {len(self.pending_trades)}")
             if self.pending_trades:
                 # Use executemany for batch insert in a transaction
                 query = 'INSERT INTO trades (timestamp, buyer_id, seller_id, price, quantity) VALUES (?, ?, ?, ?, ?)'
                 args = [(trade['timestamp'], trade['buyer_id'], trade['seller_id'], trade['price'], trade['quantity']) for trade in self.pending_trades]
-                print(query, args)
                 self.db_conn.executemany(
                     query,
                     args
@@ -216,6 +212,5 @@ class OrderBook:
 
     async def _flush_to_db_periodically(self):
         while True:
-            print("Flushing trades to DB...")
             await self._flush_to_db()
             await asyncio.sleep(5)
