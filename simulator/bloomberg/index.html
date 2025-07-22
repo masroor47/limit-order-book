@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stock Market Data Visualization Client</title>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 20px;
+      }
+      #plot {
+        width: 100%;
+        height: 600px;
+      }
+      #orderbook-plot {
+        width: 100%;
+        height: 600px;
+        display: none;
+      }
+      button {
+        margin: 10px 0;
+        padding: 10px;
+      }
+      .date-range {
+        margin: 10px 0;
+      }
+      .date-range label {
+        margin-right: 10px;
+      }
+      .date-range input {
+        margin-right: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Bloomberg</h1>
+    <div class="date-range">
+      <label for="start-date">Start Date:</label>
+      <input type="datetime-local" id="start-date" />
+      <label for="end-date">End Date:</label>
+      <input type="datetime-local" id="end-date" />
+      <button id="apply-range">Apply Range</button>
+    </div>
+    <div>
+      <label for="candle-interval">Candle Interval:</label>
+      <select id="candle-interval">
+        <option value="10">10s</option>
+        <option value="30">30s</option>
+        <option value="60">1m</option>
+        <option value="1800">30m</option>
+        <option value="3600">1h</option>
+      </select>
+    </div>
+    <div id="plot"></div>
+    <button id="toggle-orderbook">Show Order Book</button>
+    <div id="orderbook-plot"></div>
+    <script src="script.js"></script>
+  </body>
+</html>
