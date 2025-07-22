@@ -1,6 +1,7 @@
 import asyncio
 import websockets
 import json
+import time
 import uuid
 
 from OrderBook import Order
@@ -29,7 +30,7 @@ class OrderServer:
                     side=order_dict["side"],
                     price=float(order_dict["price"]),
                     quantity=int(order_dict["quantity"]),
-                    timestamp=asyncio.get_event_loop().time()
+                    timestamp=time.time()
                 )
                 trades = await self.order_book.add_order(order)
                 await websocket.send(json.dumps(trades))
@@ -43,11 +44,13 @@ class OrderServer:
                         await seller_ws.send(json.dumps([trade]))
         except websockets.exceptions.ConnectionClosed:
             print(f"Connection closed for trader {trader_id}")
-            del self.trader_ids[websocket]  # Clean up on disconnect
         finally:
+            # Clean up both mappings
             if websocket in self.trader_ids:
                 print(f"Cleaning up trader {trader_id}")
                 del self.trader_ids[websocket]
+            if trader_id in self.websocket_traders:
+                del self.websocket_traders[trader_id]
 
     async def start(self):
         async with websockets.serve(self.handle_order, self.host, self.port):
