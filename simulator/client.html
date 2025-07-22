@@ -43,6 +43,16 @@
       <input type="datetime-local" id="end-date" />
       <button id="apply-range">Apply Range</button>
     </div>
+    <div>
+      <label for="tick-size">Tick Size:</label>
+      <select id="tick-size">
+        <option value="10">10s</option>
+        <option value="30">30s</option>
+        <option value="60">1m</option>
+        <option value="1800">30m</option>
+        <option value="3600">1h</option>
+      </select>
+    </div>
     <div id="plot"></div>
     <button id="toggle-orderbook">Show Order Book</button>
     <div id="orderbook-plot"></div>
@@ -94,16 +104,22 @@
       // Date range elements
       const startDateInput = document.getElementById("start-date");
       const endDateInput = document.getElementById("end-date");
+      const tickSizeSelect = document.getElementById("tick-size");
       const applyButton = document.getElementById("apply-range");
 
       // Load persistent range from localStorage
       const savedStart = localStorage.getItem("startDate");
       const savedEnd = localStorage.getItem("endDate");
+      const savedTickSize = localStorage.getItem("tickSize");
+
       if (savedStart) {
         startDateInput.value = savedStart;
       }
       if (savedEnd) {
         endDateInput.value = savedEnd;
+      }
+      if (savedTickSize) {
+        tickSizeSelect.value = savedTickSize;
       }
 
       // Set default start if not saved (market open today or previous day)
@@ -135,6 +151,18 @@
         );
       }
 
+      // Function to request OHLCV data
+      function requestOHLCV(fromTime, toTime, tickSize) {
+        ws.send(
+          JSON.stringify({
+            type: "request_historical_ohlc",
+            from_time: fromTime,
+            to_time: toTime,
+            tick_size: tickSize,
+          })
+        );
+      }
+
       // Function to initialize or update plot
       function updatePlot(trades) {
         if (trades && Array.isArray(trades)) {
@@ -159,23 +187,98 @@
         }
       }
 
+      // Function to initialize or update OHLCV plot
+      function updateOHLCVPlot(data) {
+        const times = data.map((d) => new Date(d.time * 1000)); // Convert back to Date
+        const opens = data.map((d) => d.open);
+        const highs = data.map((d) => d.high);
+        const lows = data.map((d) => d.low);
+        const closes = data.map((d) => d.close);
+        const volumes = data.map((d) => d.volume);
+        const tickSize = parseInt(tickSizeSelect.value);
+        Plotly.newPlot(
+          "plot",
+          [
+            {
+              type: "candlestick",
+              x: times,
+              open: opens,
+              high: highs,
+              low: lows,
+              close: closes,
+              name: "Price",
+              increasing: { line: { color: "green" } }, // Optional: Color up candles green
+              decreasing: { line: { color: "red" } }, // Optional: Color down candles red
+            },
+            {
+              type: "bar",
+              x: times,
+              y: volumes,
+              name: "Volume",
+              yaxis: "y2",
+              marker: { color: "blue" }, // Optional: Style volume bars
+            },
+          ],
+          {
+            // Corrected: No outer 'layout' key—just the properties directly
+            title: "OHLCV Chart",
+            xaxis: {
+              title: "Time",
+              rangeslider: { visible: true }, // Optional: Add zoom slider
+            },
+            yaxis: {
+              title: "Price",
+              domain: [0.25, 1], // Adjusted slightly for better spacing; top 75%
+            },
+            yaxis2: {
+              title: "Volume",
+              domain: [0, 0.2], // Bottom 20% for volume
+              showgrid: false,
+              overlaying: false, // Ensure it's a true subplot, not overlay
+            },
+            height: 600, // Optional: Set explicit height to avoid resizing issues
+            margin: { t: 50, b: 50, l: 50, r: 50 }, // Optional: Adjust margins
+          }
+        );
+        currentBucket = Math.floor(Date.now() / 1000 / tickSize) * tickSize; // Track for real-time
+        currentCandle = {
+          open: data[data.length - 1]?.close || null,
+          high: null,
+          low: null,
+          close: null,
+          volume: 0,
+        };
+      }
+
       ws.onopen = function () {
         console.log("WebSocket connected");
 
         // On open, request initial data using saved or default range
-        let fromTime = 0;
-        let toTime = Math.floor(Date.now() / 1000);
-        if (startDateInput.value) {
-          fromTime = Math.floor(
-            new Date(startDateInput.value).getTime() / 1000
-          );
+        // let fromTime = 0;
+        // let toTime = Math.floor(Date.now() / 1000);
+        // if (startDateInput.value) {
+        //   fromTime = Math.floor(
+        //     new Date(startDateInput.value).getTime() / 1000
+        //   );
+        // }
+        // if (endDateInput.value) {
+        //   toTime = Math.floor(new Date(endDateInput.value).getTime() / 1000);
+        // } else {
+        //   toTime = Math.floor(Date.now() / 1000);
+        // }
+        let startValue = startDateInput.value;
+        let endValue = endDateInput.value;
+        let tickSizeValue = parseInt(tickSizeSelect.value);
+        if (startValue) {
+          fromTime = convertDateToTimestamp(startValue);
         }
-        if (endDateInput.value) {
-          toTime = Math.floor(new Date(endDateInput.value).getTime() / 1000);
+        if (endValue) {
+          toTime = convertDateToTimestamp(endValue);
         } else {
           toTime = Math.floor(Date.now() / 1000);
         }
-        requestHistorical(fromTime, toTime);
+        // requestHistorical(fromTime, toTime);
+        requestOHLCV(fromTime, toTime, tickSizeValue);
 
         // Subscribe to real-time trades after historical
       };
@@ -186,38 +289,87 @@
 
         if (data.type === "historical_trades") {
           updatePlot(data.trades);
-
           // Subscribe to real-time trades only after historical is processed
           ws.send(JSON.stringify({ type: "subscribe_trades" }));
+        } else if (data.type == "historical_ohlc") {
+          updateOHLCVPlot(data.data);
+          // Subscribe to real-time OHLCV updates
+          ws.send(JSON.stringify({ type: "subscribe_trades" }));
         } else if (data.type === "new_trades") {
-          // Append new trades if they fall within the current range
-          const currentFrom = startDateInput.value
-            ? new Date(startDateInput.value).getTime() / 1000
-            : 0;
-          const currentTo = endDateInput.value
-            ? new Date(endDateInput.value).getTime() / 1000
-            : Infinity;
-
-          if (data.trades && Array.isArray(data.trades)) {
-            const newX = [];
-            const newY = [];
-            for (const trade of data.trades) {
-              if (
-                trade.timestamp >= currentFrom &&
-                trade.timestamp <= currentTo
-              ) {
-                tradeData.x.push(new Date(trade.timestamp * 1000));
-                tradeData.y.push(trade.price);
-                newX.push(new Date(trade.timestamp * 1000));
-                newY.push(trade.price);
-              }
+          data.trades.forEach((trade) => {
+            const tickSize = parseInt(tickSizeSelect.value);
+            const bucket = Math.floor(trade.timestamp / tickSize) * tickSize;
+            if (bucket > currentBucket) {
+              // Finalize old candle, start new (add to Plotly with Plotly.extendTraces)
+              Plotly.extendTraces(
+                "chart",
+                {
+                  x: [[new Date(currentBucket * 1000)]],
+                  open: [[currentCandle.open]] /* etc */,
+                },
+                [0]
+              );
+              Plotly.extendTraces(
+                "chart",
+                {
+                  x: [[new Date(currentBucket * 1000)]],
+                  y: [[currentCandle.volume]],
+                },
+                [1]
+              );
+              currentBucket = bucket;
+              currentCandle = {
+                open: trade.price,
+                high: trade.price,
+                low: trade.price,
+                close: trade.price,
+                volume: trade.quantity,
+              };
+            } else {
+              // Update current
+              if (!currentCandle.open) currentCandle.open = trade.price;
+              currentCandle.high = Math.max(
+                currentCandle.high || trade.price,
+                trade.price
+              );
+              currentCandle.low = Math.min(
+                currentCandle.low || trade.price,
+                trade.price
+              );
+              currentCandle.close = trade.price;
+              currentCandle.volume += trade.quantity;
+              // React to Plotly: Plotly.react('chart', /* updated data */);
             }
+          });
+          // } else if (data.type === "new_trades") {
+          //   // Append new trades if they fall within the current range
+          //   const currentFrom = startDateInput.value
+          //     ? new Date(startDateInput.value).getTime() / 1000
+          //     : 0;
+          //   const currentTo = endDateInput.value
+          //     ? new Date(endDateInput.value).getTime() / 1000
+          //     : Infinity;
 
-            if (newX.length > 0) {
-              // Append to the existing trace (index 0, assuming single trace)
-              Plotly.extendTraces("plot", { x: [newX], y: [newY] }, [0]);
-            }
-          }
+          //   if (data.trades && Array.isArray(data.trades)) {
+          //     const newX = [];
+          //     const newY = [];
+          //     for (const trade of data.trades) {
+          //       if (
+          //         trade.timestamp >= currentFrom &&
+          //         trade.timestamp <= currentTo
+          //       ) {
+          //         tradeData.x.push(new Date(trade.timestamp * 1000));
+          //         tradeData.y.push(trade.price);
+          //         newX.push(new Date(trade.timestamp * 1000));
+          //         newY.push(trade.price);
+          //       }
+          //     }
+
+          //     if (newX.length > 0) {
+          //       // Append to the existing trace (index 0, assuming single trace)
+          //       Plotly.extendTraces("plot", { x: [newX], y: [newY] }, [0]);
+          //     }
+          // }
         } else if (data.type === "order_book_update") {
           // Process order book update
           const state = data.data;
@@ -306,6 +458,12 @@
       applyButton.addEventListener("click", () => {
         const startValue = startDateInput.value;
         const endValue = endDateInput.value;
+        const tickSizeValue = parseInt(tickSizeSelect.value);
+        console.log("applyRange clicked with values:", {
+          startValue,
+          endValue,
+          tickSizeValue,
+        });
 
         // Save to localStorage for persistence
         if (startValue) {
@@ -318,21 +476,34 @@
         } else {
           localStorage.removeItem("endDate");
         }
+        if (tickSizeValue) {
+          localStorage.setItem("tickSize", tickSizeValue);
+        } else {
+          localStorage.removeItem("tickSize");
+        }
 
         let fromTime = 0;
         let toTime = Math.floor(Date.now() / 1000);
         if (startValue) {
-          fromTime = Math.floor(new Date(startValue).getTime() / 1000);
+          fromTime = convertDateToTimestamp(startValue);
+          // fromTime = Math.floor(new Date(startValue).getTime() / 1000);
         }
         if (endValue) {
-          toTime = Math.floor(new Date(endValue).getTime() / 1000);
+          toTime = convertDateToTimestamp(endValue);
+          // toTime = Math.floor(new Date(endValue).getTime() / 1000);
         } else {
           toTime = Math.floor(Date.now() / 1000);
         }
 
         // Request new historical data for the range
-        requestHistorical(fromTime, toTime);
+        // requestHistorical(fromTime, toTime);
+        requestOHLCV(fromTime, toTime, tickSizeValue);
       });
+
+      function convertDateToTimestamp(dateString) {
+        const date = new Date(dateString);
+        return Math.floor(date.getTime() / 1000); // Convert to seconds
+      }
 
       ws.onclose = function () {
         console.log("WebSocket disconnected");
