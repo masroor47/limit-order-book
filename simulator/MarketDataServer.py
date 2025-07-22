@@ -47,8 +47,8 @@ class MarketDataServer:
                         print("got a request for historical ohlc")
                         from_time = data.get('from_time')
                         to_time = data.get('to_time')
-                        tick_size = data.get('tick_size', 60.0)  # Default 1min
-                        ohlc = await self.get_historical_ohlc(from_time, to_time, tick_size)
+                        candle_interval = data.get('candle_interval', 60.0)  # Default 1min
+                        ohlc = await self.get_historical_ohlc(from_time, to_time, candle_interval)
                         await websocket.send(json.dumps({'type': 'historical_ohlc', 'data': ohlc}))
                     elif msg_type == 'subscribe_trades':
                         self.subscribers[websocket]['trades'] = True

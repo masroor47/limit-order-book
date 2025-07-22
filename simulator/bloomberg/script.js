@@ -105,7 +105,7 @@ function requestOHLCV(fromTime, toTime, candleInterval) {
       type: "request_historical_ohlc",
       from_time: fromTime,
       to_time: toTime,
-      tick_size: candleInterval, // TODO: rename backend to candle_interval
+      candle_interval: candleInterval,
     })
   );
 }
