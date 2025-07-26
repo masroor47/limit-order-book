@@ -24,10 +24,12 @@ class OrderServer:
         try:
             async for message in websocket:
                 order_dict = json.loads(message)
+                order_id = str(uuid.uuid4())
                 order = Order(
-                    order_id=str(uuid.uuid4()),
+                    order_id=order_id,
                     trader_id=trader_id,
                     side=order_dict["side"],
+                    order_type=order_dict.get("order_type", "limit"),
                     price=float(order_dict["price"]),
                     quantity=int(order_dict["quantity"]),
                     timestamp=time.time()
