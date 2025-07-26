@@ -36,15 +36,22 @@ def on_open(ws):
                 # Map input to full side name
                 side = 'buy' if side_input == 'b' else 'sell'
 
-                # Get price
-                try:
-                    price = float(input("Limit price: ").strip())
-                    if price <= 0:
-                        print("Price must be positive.")
-                        continue
-                except ValueError:
-                    print("Invalid price. Please enter a valid number.")
+                order_type = input("Order type (l/m) [default: limit]: ").strip().lower()
+                if order_type not in ('l', 'm', ''):
+                    print("Invalid order type. Please enter 'l' for limit or 'm' for market.")
                     continue
+                order_type = 'limit' if order_type in ('l', '') else 'market'
+
+                # Get price if limit order
+                if order_type == 'limit':
+                    try:
+                        price = float(input("Limit price: ").strip())
+                        if price <= 0:
+                            print("Price must be positive.")
+                            continue
+                    except ValueError:
+                        print("Invalid price. Please enter a valid number.")
+                        continue
 
                 # Get quantity
                 try:
@@ -60,6 +67,7 @@ def on_open(ws):
                 order = {
                     "side": side,
                     "price": price,
+                    "order_type": order_type,
                     "quantity": quantity
                 }
                 ws.send(json.dumps(order))
