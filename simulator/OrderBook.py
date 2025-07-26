@@ -6,14 +6,15 @@ import sqlite3
 from collections import deque
 
 from dataclasses import dataclass
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 @dataclass
 class Order:
     order_id: str
     trader_id: str
     side: str
-    price: float
+    order_type: str  # "limit", "market", (future: "stop_loss", etc.)
+    price: Optional[float]
     quantity: int
     timestamp: float
 
@@ -56,8 +57,8 @@ class OrderBook:
             
             self.order_map[order.order_id] = order
             trades = await self._match_order(order)
-            # add unmatched quantity to book
-            if order.quantity > 0:
+            # add unmatched limit order quantity to book
+            if order.order_type == "limit" and order.quantity > 0:
                 self._add_to_book(order)
 
             if trades:
@@ -76,9 +77,11 @@ class OrderBook:
             best_price, opposite_orders = get_best_price()
             if best_price is None:
                 break
-            if (order.side == 'buy'  and best_price > order.price) or \
-               (order.side == 'sell' and best_price < order.price):
-                break # no overlapping price
+
+            if order.order_type == 'limit':
+                if (order.side == 'buy'  and best_price > order.price) or \
+                   (order.side == 'sell' and best_price < order.price):
+                    break # no overlapping price
 
             opposite_order = opposite_orders[0]
             trade_quantity = min(order.quantity, opposite_order.quantity)
@@ -134,7 +137,12 @@ class OrderBook:
     def _validate_order(self, order: Order) -> bool:
         if order.side not in ("buy", "sell"):
             return False
-        if order.price <= 0 or order.quantity <= 0:
+        if order.order_type not in ("limit", "market"):
+            return False
+        if order.order_type == "limit":
+            if order.price is None or order.price <= 0:
+                return False
+        if order.quantity <= 0:
             return False
         if order.order_id in self.order_map:
             return False  # duplicate order
